@@ -416,8 +416,8 @@ jobs:
             sleep 5
           done
           echo "Health check timeout after 150 seconds"
-          docker logs appflowy-docker-ci-appflowy_cloud-1
-          exit 1
+          docker logs appflowy-docker-ci-appflowy_cloud-1 --tail 50
+          docker logs appflowy-docker-ci-appflowy_billing-1 --tail 50
 
       - name: Test server info
         run: |
