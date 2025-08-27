@@ -407,7 +407,7 @@ jobs:
       - name: Wait for services to be ready
         run: |
           echo "Waiting for services to be ready..."
-          for i in {1..60}; do
+          for i in {1..30}; do
             if curl -f http://localhost/health 2>/dev/null; then
               echo "Health check passed after $((i*5)) seconds"
               exit 0
@@ -415,7 +415,8 @@ jobs:
             echo "Attempt $i: Health check failed, waiting 5 seconds..."
             sleep 5
           done
-          echo "Health check timeout after 300 seconds"
+          echo "Health check timeout after 150 seconds"
+          docker logs appflowy-docker-ci-appflowy_cloud-1
           exit 1
 
       - name: Test server info
