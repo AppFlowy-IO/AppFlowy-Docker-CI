@@ -687,6 +687,15 @@ jobs:
             echo "Attempt $i: AppFlowy AI health check failed, waiting 5 seconds..."
             sleep 5
           done
+          
+          # If we reach here, the health check failed
+          if ! curl -f http://localhost:5001/health 2>/dev/null; then
+            echo "❌ AppFlowy AI health check failed after 5 minutes"
+            echo "=== Docker logs for appflowy-docker-ci-ai-1 ==="
+            docker logs appflowy-docker-ci-ai-1 || echo "Could not get logs for appflowy-docker-ci-ai-1"
+            echo "=== End of logs ==="
+            exit 1
+          fi
 
       - name: Test AppFlowy AI health
         run: |
