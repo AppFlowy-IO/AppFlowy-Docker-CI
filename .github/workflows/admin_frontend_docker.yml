@@ -1,0 +1,126 @@
+name: Build Admin Frontend Docker Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name for the Docker image (e.g., v1.2.3 or 1.2.3)'
+        required: true
+        type: string
+      admin_branch:
+        description: 'Branch to build from AppFlowy-Admin repo'
+        required: false
+        default: 'main'
+        type: string
+      build_arm64:
+        description: 'Also build ARM64 images (AMD64 always built)'
+        type: boolean
+        required: false
+        default: true
+      tag_latest:
+        description: 'Also tag and publish as latest'
+        type: boolean
+        required: false
+        default: true
+
+env:
+  LATEST_TAG: latest
+
+jobs:
+  admin_frontend_image:
+    runs-on: ${{ matrix.job.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        job: ${{ fromJson(github.event.inputs.build_arm64 == 'true' && '[{"os":"ubuntu-22.04","platform":"linux/amd64","arch":"amd64"},{"os":"ubuntu-22.04-arm","platform":"linux/arm64","arch":"arm64v8"}]' || '[{"os":"ubuntu-22.04","platform":"linux/amd64","arch":"amd64"}]') }}
+    env:
+      IMAGE_NAME: ${{ secrets.DOCKER_HUB_USERNAME }}/admin_frontend
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          repository: AppFlowy-IO/AppFlowy-Admin
+          token: ${{ secrets.ADMIN_GITHUB_TOKEN }}
+          ref: ${{ github.event.inputs.admin_branch }}
+          fetch-depth: 1
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+
+      - name: Get git tag
+        id: vars
+        run: |
+          T="${{ github.event.inputs.tag_name }}"
+          echo "GIT_TAG=$T" >> $GITHUB_ENV
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: registry.hub.docker.com/${{ env.IMAGE_NAME }}
+
+      - name: Build and push ${{ env.IMAGE_NAME }}:${{ env.GIT_TAG }}-${{ matrix.job.arch }}
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: ${{ matrix.job.platform }}
+          file: ./apps/super/Dockerfile
+          push: true
+          cache-from: type=gha,scope=admin_frontend-${{ matrix.job.arch }}
+          cache-to: type=gha,mode=max,scope=admin_frontend-${{ matrix.job.arch }}
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ env.GIT_TAG }}-${{ matrix.job.arch }}
+            ${{ github.event.inputs.tag_latest == 'true' && format('{0}:{1}-{2}', env.IMAGE_NAME, env.LATEST_TAG, matrix.job.arch) || '' }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          build-args: |
+            VERSION=${{ env.GIT_TAG }}
+
+      - name: Logout from Docker Hub
+        if: always()
+        run: docker logout
+
+  admin_frontend_manifest:
+    runs-on: ubuntu-22.04
+    needs: [admin_frontend_image]
+    steps:
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+
+      - name: Get git tag
+        id: vars
+        run: |
+          T="${{ github.event.inputs.tag_name }}"
+          echo "GIT_TAG=$T" >> $GITHUB_ENV
+
+      - name: Create and push manifest for admin_frontend:version
+        uses: Noelware/docker-manifest-action@0.4.3
+        with:
+          inputs: ${{ secrets.DOCKER_HUB_USERNAME }}/admin_frontend:${{ env.GIT_TAG }}
+          images: ${{ secrets.DOCKER_HUB_USERNAME }}/admin_frontend:${{ env.GIT_TAG }}-amd64${{ github.event.inputs.build_arm64 == 'true' && format(',{0}/admin_frontend:{1}-arm64v8', secrets.DOCKER_HUB_USERNAME, env.GIT_TAG) || '' }}
+          push: true
+
+      - name: Create and push manifest for admin_frontend:latest
+        if: ${{ github.event.inputs.tag_latest == 'true' }}
+        uses: Noelware/docker-manifest-action@0.4.3
+        with:
+          inputs: ${{ secrets.DOCKER_HUB_USERNAME }}/admin_frontend:${{ env.LATEST_TAG }}
+          images: ${{ secrets.DOCKER_HUB_USERNAME }}/admin_frontend:${{ env.LATEST_TAG }}-amd64${{ github.event.inputs.build_arm64 == 'true' && format(',{0}/admin_frontend:{1}-arm64v8', secrets.DOCKER_HUB_USERNAME, env.LATEST_TAG) || '' }}
+          push: true
+
+      - name: Logout from Docker Hub
+        if: always()
+        run: docker logout
