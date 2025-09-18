@@ -1,4 +1,5 @@
 name: Build Admin Frontend Docker Image
+run-name: Build Admin Frontend ${{ github.event.inputs.tag_name }} from ${{ github.event.inputs.admin_branch }}
 
 on:
   workflow_dispatch:
