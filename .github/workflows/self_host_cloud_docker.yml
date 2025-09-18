@@ -1,4 +1,5 @@
 name: Self-Hosted AppFlowy Cloud Docker Images
+run-name: Build Self-Hosted ${{ github.event.inputs.custom_tag }} - Push ${{ github.event.inputs.push_appflowy_cloud == 'true' && '☁️' || '' }}${{ github.event.inputs.push_appflowy_ai == 'true' && '🤖' || '' }}${{ github.event.inputs.push_appflowy_web == 'true' && '🌐' || '' }}📱
 
 on:
   workflow_dispatch:
