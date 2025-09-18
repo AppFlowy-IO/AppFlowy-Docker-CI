@@ -15,6 +15,10 @@ on:
         description: "AppFlowy Web branch (from AppFlowy-Web-Premium)"
         required: true
         default: "main"
+      appflowy_admin_branch:
+        description: "AppFlowy Admin branch (from AppFlowy-Admin)"
+        required: true
+        default: "main"
       custom_tag:
         description: "Custom tag to use (overrides automatic tag generation). Example: 0.9.8"
         required: true
@@ -1099,11 +1103,109 @@ jobs:
         if: always()
         run: docker logout
 
+  appflowy_admin_image:
+    runs-on: ${{ matrix.job.os }}
+    needs: [wait_for_all_builds]
+    env:
+      IMAGE_NAME: ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_admin
+    strategy:
+      fail-fast: true
+      matrix:
+        job: ${{ fromJson(github.event.inputs.build_arm64 == 'true' && '[{"os":"ubuntu-22.04","name":"amd64","docker_platform":"linux/amd64"},{"os":"ubuntu-22.04-arm","name":"arm64v8","docker_platform":"linux/arm64"}]' || '[{"os":"ubuntu-22.04","name":"amd64","docker_platform":"linux/amd64"}]') }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          repository: AppFlowy-IO/AppFlowy-Admin
+          token: ${{ secrets.ADMIN_GITHUB_TOKEN }}
+          ref: ${{ github.event.inputs.appflowy_admin_branch }}
+          fetch-depth: 1
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Get git tag
+        id: vars
+        run: |
+          T="${{ github.event.inputs.custom_tag }}"
+          echo "GIT_TAG=$T" >> $GITHUB_ENV
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: registry.hub.docker.com/${{ env.IMAGE_NAME }}
+
+      - name: Build and push ${{ matrix.job.name }}:${{ env.GIT_TAG }}
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: ${{ matrix.job.docker_platform }}
+          file: ./apps/super/Dockerfile
+          push: true
+          cache-from: type=gha,scope=appflowy_admin-${{ matrix.job.name }}
+          cache-to: type=gha,mode=max,scope=appflowy_admin-${{ matrix.job.name }}
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ env.GIT_TAG }}-${{ matrix.job.name }}
+            ${{ github.event.inputs.tag_latest == 'true' && format('{0}:{1}-{2}', env.IMAGE_NAME, env.LATEST_TAG, matrix.job.name) || '' }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          build-args: |
+            VERSION=${{ env.GIT_TAG }}
+
+      - name: Logout from Docker Hub
+        if: always()
+        run: docker logout
+
+  appflowy_admin_manifest:
+    runs-on: ubuntu-22.04
+    needs: [appflowy_admin_image]
+    steps:
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+
+      - name: Get git tag
+        id: vars
+        run: |
+          T="${{ github.event.inputs.custom_tag }}"
+          echo "GIT_TAG=$T" >> $GITHUB_ENV
+
+      - name: Create and push manifest for appflowy_admin:version
+        uses: Noelware/docker-manifest-action@0.4.3
+        with:
+          inputs: ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_admin:${{ env.GIT_TAG }}
+          images: ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_admin:${{ env.GIT_TAG }}-amd64${{ github.event.inputs.build_arm64 == 'true' && format(',{0}/appflowy_admin:{1}-arm64v8', secrets.DOCKER_HUB_USERNAME, env.GIT_TAG) || '' }}
+          push: true
+
+      - name: Create and push manifest for appflowy_admin:latest
+        if: ${{ github.event.inputs.tag_latest == 'true' }}
+        uses: Noelware/docker-manifest-action@0.4.3
+        with:
+          inputs: ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_admin:${{ env.LATEST_TAG }}
+          images: ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_admin:${{ env.LATEST_TAG }}-amd64${{ github.event.inputs.build_arm64 == 'true' && format(',{0}/appflowy_admin:{1}-arm64v8', secrets.DOCKER_HUB_USERNAME, env.LATEST_TAG) || '' }}
+          push: true
+
+      - name: Logout from Docker Hub
+        if: always()
+        run: docker logout
+
       
   cleanup_artifacts:
     runs-on: ubuntu-22.04
     if: always()
-    needs: [gotrue_manifest, appflowy_cloud_manifest, appflowy_ai_manifest, appflowy_worker_manifest, appflowy_web_manifest]
+    needs: [gotrue_manifest, appflowy_cloud_manifest, appflowy_ai_manifest, appflowy_worker_manifest, appflowy_web_manifest, appflowy_admin_manifest]
     steps:
       - name: Delete GoTrue artifacts
         uses: geekyeggo/delete-artifact@v5
