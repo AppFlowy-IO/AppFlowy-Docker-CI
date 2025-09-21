@@ -1,5 +1,5 @@
-name: Build AppFlowy Website Docker Image
-run-name: Build AppFlowy Website ${{ github.event.inputs.tag_name }} from ${{ github.event.inputs.website_branch }}
+name: Build AppFlowy Web Premium Docker Image
+run-name: Build AppFlowy Web Premium ${{ github.event.inputs.tag_name }} from ${{ github.event.inputs.appflowy_web_branch }}
 
 on:
   workflow_dispatch:
