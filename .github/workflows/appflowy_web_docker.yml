@@ -42,7 +42,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: AppFlowy-IO/AppFlowy-Web-Premium
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.ADMIN_GITHUB_TOKEN }}
           ref: ${{ github.event.inputs.appflowy_web_branch }}
           fetch-depth: 1
 
