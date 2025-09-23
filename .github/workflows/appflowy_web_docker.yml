@@ -1,5 +1,5 @@
 name: Build AppFlowy Web Premium Docker Image
-run-name: Build AppFlowy Web Premium ${{ github.event.inputs.tag_name }} from ${{ github.event.inputs.appflowy_web_branch }}
+run-name: Build AppFlowy Web Premium ${{ github.event.inputs.tag_name }} from ${{ github.event.inputs.appflowy_web_branch }} ${{ github.event.inputs.tag_latest == 'true' && 'latest' || '' }}
 
 on:
   workflow_dispatch:

@@ -1,5 +1,5 @@
 name: Build Admin Frontend Docker Image
-run-name: Build Admin Frontend ${{ github.event.inputs.tag_name }} from ${{ github.event.inputs.admin_branch }}
+run-name: Build Admin Frontend ${{ github.event.inputs.tag_name }} from ${{ github.event.inputs.admin_branch }} ${{ github.event.inputs.tag_latest == 'true' && 'latest' || '' }}
 
 on:
   workflow_dispatch:

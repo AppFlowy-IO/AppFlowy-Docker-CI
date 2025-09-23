@@ -1,5 +1,5 @@
 name: Build AppFlowy Website Docker Image
-run-name: Build AppFlowy Website ${{ github.event.inputs.tag_name }} from ${{ github.event.inputs.website_branch }}
+run-name: Build AppFlowy Website ${{ github.event.inputs.tag_name }} from ${{ github.event.inputs.website_branch }} ${{ github.event.inputs.tag_latest == 'true' && 'latest' || '' }}
 
 on:
   workflow_dispatch:
