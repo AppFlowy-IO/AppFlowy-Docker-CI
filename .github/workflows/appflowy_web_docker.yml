@@ -1,5 +1,5 @@
-name: Build AppFlowy Web Premium Docker Image
-run-name: Build AppFlowy Web Premium ${{ github.event.inputs.tag_name }} from ${{ github.event.inputs.appflowy_web_branch }} ${{ github.event.inputs.tag_latest == 'true' && 'latest' || '' }}
+name: Build AppFlowy Web Docker Image
+run-name: Build AppFlowy Web ${{ github.event.inputs.tag_name }} from ${{ github.event.inputs.appflowy_web_branch }} ${{ github.event.inputs.tag_latest == 'true' && 'latest' || '' }} ${{ github.event.inputs.push_public == 'true' && '(public + premium)' || '(premium only)' }}
 
 on:
   workflow_dispatch:
@@ -23,6 +23,11 @@ on:
         type: boolean
         required: false
         default: true
+      push_public:
+        description: 'Also push to public appflowy_web repository'
+        type: boolean
+        required: false
+        default: false
 
 env:
   LATEST_TAG: latest
@@ -35,7 +40,8 @@ jobs:
       matrix:
         job: ${{ fromJson(github.event.inputs.build_arm64 == 'true' && '[{"os":"ubuntu-22.04","platform":"linux/amd64","arch":"amd64"},{"os":"ubuntu-22.04-arm","platform":"linux/arm64","arch":"arm64v8"}]' || '[{"os":"ubuntu-22.04","platform":"linux/amd64","arch":"amd64"}]') }}
     env:
-      IMAGE_NAME: ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_web_premium
+      IMAGE_NAME_PREMIUM: ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_web_premium
+      IMAGE_NAME_PUBLIC: ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_web
 
     steps:
       - name: Check out the repository
@@ -68,20 +74,22 @@ jobs:
         id: meta
         uses: docker/metadata-action@v4
         with:
-          images: registry.hub.docker.com/${{ env.IMAGE_NAME }}
+          images: registry.hub.docker.com/${{ env.IMAGE_NAME_PREMIUM }}
 
-      - name: Build and push ${{ env.IMAGE_NAME }}:${{ env.GIT_TAG }}-${{ matrix.job.arch }}
+      - name: Build and push to appflowy_web_premium
         uses: docker/build-push-action@v5
         with:
           context: .
           platforms: ${{ matrix.job.platform }}
           file: ./docker/Dockerfile.ssr
           push: true
-          cache-from: type=gha,scope=appflowy_web_premium-${{ matrix.job.arch }}
-          cache-to: type=gha,mode=max,scope=appflowy_web_premium-${{ matrix.job.arch }}
+          cache-from: type=gha,scope=appflowy_web-${{ matrix.job.arch }}
+          cache-to: type=gha,mode=max,scope=appflowy_web-${{ matrix.job.arch }}
           tags: |
-            ${{ env.IMAGE_NAME }}:${{ env.GIT_TAG }}-${{ matrix.job.arch }}
-            ${{ github.event.inputs.tag_latest == 'true' && format('{0}:{1}-{2}', env.IMAGE_NAME, env.LATEST_TAG, matrix.job.arch) || '' }}
+            ${{ env.IMAGE_NAME_PREMIUM }}:${{ env.GIT_TAG }}-${{ matrix.job.arch }}
+            ${{ github.event.inputs.tag_latest == 'true' && format('{0}:{1}-{2}', env.IMAGE_NAME_PREMIUM, env.LATEST_TAG, matrix.job.arch) || '' }}
+            ${{ github.event.inputs.push_public == 'true' && format('{0}:{1}-{2}', env.IMAGE_NAME_PUBLIC, env.GIT_TAG, matrix.job.arch) || '' }}
+            ${{ github.event.inputs.push_public == 'true' && github.event.inputs.tag_latest == 'true' && format('{0}:{1}-{2}', env.IMAGE_NAME_PUBLIC, env.LATEST_TAG, matrix.job.arch) || '' }}
           labels: ${{ steps.meta.outputs.labels }}
           provenance: false
           build-args: |
@@ -120,6 +128,22 @@ jobs:
         with:
           inputs: ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_web_premium:${{ env.LATEST_TAG }}
           images: ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_web_premium:${{ env.LATEST_TAG }}-amd64${{ github.event.inputs.build_arm64 == 'true' && format(',{0}/appflowy_web_premium:{1}-arm64v8', secrets.DOCKER_HUB_USERNAME, env.LATEST_TAG) || '' }}
+          push: true
+
+      - name: Create and push manifest for appflowy_web:version (public)
+        if: ${{ github.event.inputs.push_public == 'true' }}
+        uses: Noelware/docker-manifest-action@0.4.3
+        with:
+          inputs: ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_web:${{ env.GIT_TAG }}
+          images: ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_web:${{ env.GIT_TAG }}-amd64${{ github.event.inputs.build_arm64 == 'true' && format(',{0}/appflowy_web:{1}-arm64v8', secrets.DOCKER_HUB_USERNAME, env.GIT_TAG) || '' }}
+          push: true
+
+      - name: Create and push manifest for appflowy_web:latest (public)
+        if: ${{ github.event.inputs.push_public == 'true' && github.event.inputs.tag_latest == 'true' }}
+        uses: Noelware/docker-manifest-action@0.4.3
+        with:
+          inputs: ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_web:${{ env.LATEST_TAG }}
+          images: ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_web:${{ env.LATEST_TAG }}-amd64${{ github.event.inputs.build_arm64 == 'true' && format(',{0}/appflowy_web:{1}-arm64v8', secrets.DOCKER_HUB_USERNAME, env.LATEST_TAG) || '' }}
           push: true
 
       - name: Logout from Docker Hub
