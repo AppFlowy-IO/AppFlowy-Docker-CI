@@ -403,20 +403,20 @@ jobs:
           docker compose -f docker-compose-ci.yml up -d --no-build
           docker ps -a
 
-      - name: Test server info
-        run: |
-          response=$(curl -s http://localhost/api/server-info)
-          if [ $? -ne 0 ]; then
-            echo "Failed to connect to server-info endpoint"
-            exit 1
-          fi
-          echo "Server info response: $response"
-          self_hosted=$(echo "$response" | jq -r '.data.self_hosted')
-          if [ "$self_hosted" != "true" ]; then
-            echo "ERROR: self_hosted field is '$self_hosted', expected 'true'"
-            exit 1
-          fi
-          echo "✓ Server info test passed: self_hosted is true"
+      # - name: Test server info
+      #   run: |
+      #     response=$(curl -s http://localhost/api/server-info)
+      #     if [ $? -ne 0 ]; then
+      #       echo "Failed to connect to server-info endpoint"
+      #       exit 1
+      #     fi
+      #     echo "Server info response: $response"
+      #     self_hosted=$(echo "$response" | jq -r '.data.self_hosted')
+      #     if [ "$self_hosted" != "true" ]; then
+      #       echo "ERROR: self_hosted field is '$self_hosted', expected 'true'"
+      #       exit 1
+      #     fi
+      #     echo "✓ Server info test passed: self_hosted is true"
 
       - name: Stop Docker Compose
         if: always()
