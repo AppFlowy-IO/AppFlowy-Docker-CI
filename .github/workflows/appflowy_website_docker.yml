@@ -23,6 +23,14 @@ on:
         type: boolean
         required: false
         default: true
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'test'
+        type: choice
+        options:
+          - test
+          - prod
 
 env:
   LATEST_TAG: latest
@@ -64,6 +72,44 @@ jobs:
           T="${{ github.event.inputs.tag_name }}"
           echo "GIT_TAG=$T" >> $GITHUB_ENV
 
+      - name: Configure environment variables
+        run: |
+          echo "NODE_ENV=production" >> $GITHUB_ENV
+
+          if [ "${{ github.event.inputs.environment }}" = "prod" ]; then
+            {
+              echo "ENVIRONMENT=production"
+              echo "NEXT_PUBLIC_API_BASE_URL=${{ secrets.WEBSITE_PROD_NEXT_PUBLIC_API_BASE_URL }}"
+              echo "NEXT_PUBLIC_API_KEY=${{ secrets.WEBSITE_PROD_NEXT_PUBLIC_API_KEY }}"
+              echo "NEXT_PUBLIC_GA_MEASUREMENT_ID=${{ secrets.WEBSITE_PROD_NEXT_PUBLIC_GA_MEASUREMENT_ID }}"
+              echo "NEXT_PUBLIC_SITE_BASE_URL=${{ secrets.WEBSITE_PROD_NEXT_PUBLIC_SITE_BASE_URL }}"
+              echo "SLACK_WEBHOOK_URL=${{ secrets.WEBSITE_PROD_SLACK_WEBHOOK_URL }}"
+            } >> $GITHUB_ENV
+          else
+            {
+              echo "ENVIRONMENT=test"
+              echo "NEXT_PUBLIC_API_BASE_URL=${{ secrets.WEBSITE_TEST_NEXT_PUBLIC_API_BASE_URL }}"
+              echo "NEXT_PUBLIC_API_KEY=${{ secrets.WEBSITE_TEST_NEXT_PUBLIC_API_KEY }}"
+              echo "NEXT_PUBLIC_GA_MEASUREMENT_ID=${{ secrets.WEBSITE_TEST_NEXT_PUBLIC_GA_MEASUREMENT_ID }}"
+              echo "NEXT_PUBLIC_SITE_BASE_URL=https://test.appflowy.com"
+              echo "SLACK_WEBHOOK_URL=${{ secrets.WEBSITE_TEST_SLACK_WEBHOOK_URL }}"
+            } >> $GITHUB_ENV
+          fi
+
+      - name: Generate env files for build
+        run: |
+          {
+            echo "NODE_ENV=${NODE_ENV}"
+            echo "ENVIRONMENT=${ENVIRONMENT}"
+            echo "NEXT_PUBLIC_API_KEY=${NEXT_PUBLIC_API_KEY}"
+            echo "NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}"
+            echo "NEXT_PUBLIC_SITE_BASE_URL=${NEXT_PUBLIC_SITE_BASE_URL}"
+            echo "NEXT_PUBLIC_GA_MEASUREMENT_ID=${NEXT_PUBLIC_GA_MEASUREMENT_ID}"
+            echo "NEXT_PUBLIC_ADS_ID=${NEXT_PUBLIC_ADS_ID}"
+            echo "SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}"
+          } > .env
+          cp .env .env.production
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v4
@@ -86,6 +132,14 @@ jobs:
           provenance: false
           build-args: |
             VERSION=${{ env.GIT_TAG }}
+            NODE_ENV=${{ env.NODE_ENV }}
+            ENVIRONMENT=${{ env.ENVIRONMENT }}
+            NEXT_PUBLIC_API_KEY=${{ env.NEXT_PUBLIC_API_KEY }}
+            NEXT_PUBLIC_API_BASE_URL=${{ env.NEXT_PUBLIC_API_BASE_URL }}
+            NEXT_PUBLIC_SITE_BASE_URL=${{ env.NEXT_PUBLIC_SITE_BASE_URL }}
+            NEXT_PUBLIC_GA_MEASUREMENT_ID=${{ env.NEXT_PUBLIC_GA_MEASUREMENT_ID }}
+            NEXT_PUBLIC_ADS_ID=${{ env.NEXT_PUBLIC_ADS_ID }}
+            SLACK_WEBHOOK_URL=${{ env.SLACK_WEBHOOK_URL }}
 
       - name: Logout from Docker Hub
         if: always()
