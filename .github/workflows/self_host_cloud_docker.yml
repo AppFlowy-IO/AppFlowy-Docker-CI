@@ -858,6 +858,7 @@ jobs:
           provenance: false
           build-args: |
             PROFILE=release
+            FEATURES=${{ env.CI_APPFLOWY_CLOUD_FEATURES }}
             APP_VERSION=${{ env.GIT_TAG }}
 
       - name: Save AppFlowy Worker image locally
