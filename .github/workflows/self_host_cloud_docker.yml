@@ -1,5 +1,5 @@
 name: Self-Hosted AppFlowy Cloud Docker Images
-run-name: Build Self-Hosted ${{ github.event.inputs.custom_tag }} - Push ${{ github.event.inputs.push_appflowy_cloud == 'true' && '☁️' || '' }}${{ github.event.inputs.push_appflowy_ai == 'true' && '🤖' || '' }}${{ github.event.inputs.push_appflowy_web == 'true' && '🌐' || '' }}📱 ${{ github.event.inputs.tag_latest == 'true' && 'latest' || '' }}
+run-name: Build Self-Hosted ${{ github.event.inputs.custom_tag }} - Push ${{ github.event.inputs.push_appflowy_cloud == 'true' && '☁️' || '' }}${{ github.event.inputs.push_appflowy_ai == 'true' && '🤖' || '' }}📱 ${{ github.event.inputs.tag_latest == 'true' && 'latest' || '' }}
 
 on:
   workflow_dispatch:
@@ -10,10 +10,6 @@ on:
         default: "main"
       appflowy_ai_branch:
         description: "AppFlowy AI branch (from AppFlowy-AI-Premium)"
-        required: true
-        default: "main"
-      appflowy_web_branch:
-        description: "AppFlowy Web branch (from AppFlowy-Web-Premium)"
         required: true
         default: "main"
       appflowy_admin_branch:
@@ -31,11 +27,6 @@ on:
         default: false
       push_appflowy_ai:
         description: "Push AppFlowy AI image to registry"
-        type: boolean
-        required: false
-        default: false
-      push_appflowy_web:
-        description: "Push AppFlowy Web image to registry"
         type: boolean
         required: false
         default: false
@@ -956,155 +947,6 @@ jobs:
         if: always()
         run: docker logout
 
-  appflowy_web_image:
-    runs-on: ${{ matrix.job.os }}
-    if: ${{ github.event.inputs.push_appflowy_web == 'true' }}
-    needs: [wait_for_all_builds]
-    env:
-      IMAGE_NAME: ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_web
-    strategy:
-      fail-fast: true
-      matrix:
-        job: ${{ fromJson(github.event.inputs.build_arm64 == 'true' && '[{"os":"ubuntu-22.04","name":"amd64","docker_platform":"linux/amd64"},{"os":"ubuntu-22.04-arm","name":"arm64v8","docker_platform":"linux/arm64"}]' || '[{"os":"ubuntu-22.04","name":"amd64","docker_platform":"linux/amd64"}]') }}
-    steps:
-      - name: Check out the repository
-        uses: actions/checkout@v4
-        with:
-          repository: AppFlowy-IO/AppFlowy-Web-Premium
-          token: ${{ secrets.ADMIN_GITHUB_TOKEN }}
-          ref: ${{ github.event.inputs.appflowy_web_branch }}
-          fetch-depth: 1
-
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-
-      - name: Get git tag
-        id: vars
-        run: |
-          T="${{ github.event.inputs.custom_tag }}"
-          echo "GIT_TAG=$T" >> $GITHUB_ENV
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v4
-        with:
-          images: registry.hub.docker.com/${{ env.IMAGE_NAME }}
-
-      - name: Build and save ${{ matrix.job.name }}:${{ env.GIT_TAG }}
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          platforms: ${{ matrix.job.docker_platform }}
-          file: ./docker/Dockerfile
-          push: false
-          load: true
-          cache-from: type=gha,scope=appflowy_web-${{ matrix.job.name }}
-          cache-to: type=gha,mode=max,scope=appflowy_web-${{ matrix.job.name }}
-          tags: |
-            ${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}-${{ matrix.job.name }}
-            ${{ env.IMAGE_NAME }}:${{ env.GIT_TAG }}-${{ matrix.job.name }}
-          labels: ${{ steps.meta.outputs.labels }}
-          provenance: false
-          build-args: |
-            VERSION=${{ env.GIT_TAG }}
-
-      - name: Save AppFlowy Web image locally
-        run: |
-          mkdir -p /tmp/docker-images
-          docker save ${{ env.IMAGE_NAME }}:${{ env.GIT_TAG }}-${{ matrix.job.name }} | gzip > /tmp/docker-images/appflowy_web_${{ matrix.job.name }}.tar.gz
-          docker save ${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}-${{ matrix.job.name }} | gzip > /tmp/docker-images/appflowy_web_latest_${{ matrix.job.name }}.tar.gz
-
-      - name: Upload AppFlowy Web image as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: appflowy-web-image-${{ matrix.job.name }}
-          path: /tmp/docker-images/appflowy_web_*.tar.gz
-          retention-days: 1
-
-
-  appflowy_web_push:
-    runs-on: ubuntu-22.04
-    if: ${{ github.event.inputs.push_appflowy_web == 'true' }}
-    needs: [appflowy_web_image]
-    env:
-      IMAGE_NAME: ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_web
-    strategy:
-      fail-fast: true
-      matrix:
-        job: ${{ fromJson(github.event.inputs.build_arm64 == 'true' && '[{"name":"amd64"},{"name":"arm64v8"}]' || '[{"name":"amd64"}]') }}
-    steps:
-      - name: Get git tag
-        id: vars
-        run: |
-          T="${{ github.event.inputs.custom_tag }}"
-          echo "GIT_TAG=$T" >> $GITHUB_ENV
-
-      - name: Download AppFlowy Web image
-        uses: actions/download-artifact@v4
-        with:
-          name: appflowy-web-image-${{ matrix.job.name }}
-          path: /tmp/docker-images
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_HUB_USERNAME }}
-          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
-
-      - name: Load and Push AppFlowy Web
-        run: |
-          docker load < /tmp/docker-images/appflowy_web_${{ matrix.job.name }}.tar.gz
-          docker load < /tmp/docker-images/appflowy_web_latest_${{ matrix.job.name }}.tar.gz || true
-          if [[ "${{ github.event.inputs.tag_latest }}" == "true" ]]; then
-            docker push ${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}-${{ matrix.job.name }}
-          fi
-          docker push ${{ env.IMAGE_NAME }}:${{ env.GIT_TAG }}-${{ matrix.job.name }}
-
-      - name: Logout from Docker Hub
-        if: always()
-        run: docker logout
-
-  appflowy_web_manifest:
-    runs-on: ubuntu-22.04
-    if: ${{ github.event.inputs.push_appflowy_web == 'true' }}
-    needs: [appflowy_web_push]
-    steps:
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_HUB_USERNAME }}
-          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
-
-      - name: Get git tag
-        id: vars
-        run: |
-          T="${{ github.event.inputs.custom_tag }}"
-          echo "GIT_TAG=$T" >> $GITHUB_ENV
-
-      - name: Create and push manifest for appflowy_web:version
-        uses: Noelware/docker-manifest-action@0.4.3
-        with:
-          inputs: ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_web:${{ env.GIT_TAG }}
-          images: ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_web:${{ env.GIT_TAG }}-amd64${{ github.event.inputs.build_arm64 == 'true' && format(',{0}/appflowy_web:{1}-arm64v8', secrets.DOCKER_HUB_USERNAME, env.GIT_TAG) || '' }}
-          push: true
-
-      - name: Create and push manifest for appflowy_web:latest
-        if: ${{ github.event.inputs.tag_latest == 'true' }}
-        uses: Noelware/docker-manifest-action@0.4.3
-        with:
-          inputs: ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_web:${{ env.LATEST_TAG }}
-          images: ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_web:${{ env.LATEST_TAG }}-amd64${{ github.event.inputs.build_arm64 == 'true' && format(',{0}/appflowy_web:{1}-arm64v8', secrets.DOCKER_HUB_USERNAME, env.LATEST_TAG) || '' }}
-          push: true
-
-      - name: Logout from Docker Hub
-        if: always()
-        run: docker logout
-
   appflowy_admin_image:
     runs-on: ${{ matrix.job.os }}
     needs: [wait_for_all_builds]
@@ -1207,7 +1049,7 @@ jobs:
   cleanup_artifacts:
     runs-on: ubuntu-22.04
     if: always()
-    needs: [gotrue_manifest, appflowy_cloud_manifest, appflowy_ai_manifest, appflowy_worker_manifest, appflowy_web_manifest, appflowy_admin_manifest]
+    needs: [gotrue_manifest, appflowy_cloud_manifest, appflowy_ai_manifest, appflowy_worker_manifest, appflowy_admin_manifest]
     steps:
       - name: Delete GoTrue artifacts
         uses: geekyeggo/delete-artifact@v5
@@ -1239,14 +1081,6 @@ jobs:
           name: |
             appflowy-worker-image-amd64
             appflowy-worker-image-arm64v8
-          failOnError: false
-
-      - name: Delete AppFlowy Web artifacts
-        uses: geekyeggo/delete-artifact@v5
-        with:
-          name: |
-            appflowy-web-image-amd64
-            appflowy-web-image-arm64v8
           failOnError: false
 
       - name: Cleanup summary
