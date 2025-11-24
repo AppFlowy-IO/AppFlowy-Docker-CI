@@ -9,7 +9,7 @@ on:
         required: true
         type: string
       appflowy_web_branch:
-        description: 'Branch to build from AppFlowy-Web-Premium repo'
+        description: 'Branch to build from AppFlowy-Web repo'
         required: false
         default: 'main'
         type: string
@@ -47,7 +47,7 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@v4
         with:
-          repository: AppFlowy-IO/AppFlowy-Web-Premium
+          repository: AppFlowy-IO/AppFlowy-Web
           token: ${{ secrets.ADMIN_GITHUB_TOKEN }}
           ref: ${{ github.event.inputs.appflowy_web_branch }}
           fetch-depth: 1
@@ -76,7 +76,7 @@ jobs:
         with:
           images: registry.hub.docker.com/${{ env.IMAGE_NAME_PREMIUM }}
 
-      - name: Build and push to appflowy_web_premium
+      - name: Build and push to appflowy_web
         uses: docker/build-push-action@v5
         with:
           context: .
