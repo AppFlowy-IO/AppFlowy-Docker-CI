@@ -270,7 +270,7 @@ jobs:
 
   wait_for_all_builds:
     runs-on: ubuntu-22.04
-    needs: [gotrue_image, appflowy_cloud_image, appflowy_worker_image, appflowy_ai_image, appflowy_search_image]
+    needs: [gotrue_image, appflowy_cloud_image, appflowy_worker_image, appflowy_ai_image]
     if: always()
     steps:
       - name: Check build results
@@ -280,18 +280,16 @@ jobs:
           echo "AppFlowy Cloud build: ${{ needs.appflowy_cloud_image.result }}"
           echo "AppFlowy Worker build: ${{ needs.appflowy_worker_image.result }}"
           echo "AppFlowy AI build: ${{ needs.appflowy_ai_image.result }}"
-          echo "AppFlowy Search build: ${{ needs.appflowy_search_image.result }}"
 
-          # Check if any required builds failed
+          # Check if any required builds failed (appflowy_search is optional)
           if [[ "${{ needs.gotrue_image.result }}" == "failure" ]] || \
              [[ "${{ needs.appflowy_cloud_image.result }}" == "failure" ]] || \
              [[ "${{ needs.appflowy_worker_image.result }}" == "failure" ]] || \
-             [[ "${{ needs.appflowy_ai_image.result }}" == "failure" ]] || \
-             [[ "${{ needs.appflowy_search_image.result }}" == "failure" ]]; then
-            echo "❌ One or more builds failed"
+             [[ "${{ needs.appflowy_ai_image.result }}" == "failure" ]]; then
+            echo "❌ One or more required builds failed"
             exit 1
           else
-            echo "✅ All builds completed successfully or were skipped"
+            echo "✅ All required builds completed successfully or were skipped"
           fi
 
   appflowy_cloud_test:
@@ -1030,7 +1028,7 @@ jobs:
   appflowy_search_push:
     runs-on: ubuntu-22.04
     if: ${{ github.event.inputs.push_appflowy_search == 'true' }}
-    needs: [wait_for_all_builds]
+    needs: [appflowy_search_image]
     env:
       IMAGE_NAME: ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_search
     strategy:
