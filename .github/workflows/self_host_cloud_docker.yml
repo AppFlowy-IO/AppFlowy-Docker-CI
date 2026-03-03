@@ -876,6 +876,7 @@ jobs:
 
   appflowy_search_image:
     runs-on: ${{ matrix.job.os }}
+    if: ${{ github.event.inputs.push_appflowy_search == 'true' }}
     env:
       IMAGE_NAME: ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_search
     strategy:
