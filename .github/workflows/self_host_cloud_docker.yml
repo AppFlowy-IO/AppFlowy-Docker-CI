@@ -1,5 +1,5 @@
 name: Self-Hosted AppFlowy Cloud Docker Images
-run-name: Build Self-Hosted ${{ github.event.inputs.custom_tag }} - Push ${{ github.event.inputs.push_appflowy_cloud == 'true' && '☁️' || '' }}${{ github.event.inputs.push_appflowy_ai == 'true' && '🤖' || '' }}${{ github.event.inputs.push_appflowy_search == 'true' && '🔍' || '' }}📱 ${{ github.event.inputs.tag_latest == 'true' && 'latest' || '' }}
+run-name: Build Self-Hosted ${{ github.event.inputs.custom_tag }} - Push ${{ github.event.inputs.push_appflowy_cloud == 'true' && '☁️' || '' }}${{ github.event.inputs.push_appflowy_ai == 'true' && '🤖' || '' }}${{ github.event.inputs.push_appflowy_search == 'true' && '🔍' || '' }}${{ github.event.inputs.push_admin_frontend == 'true' && '📱' || '' }} ${{ github.event.inputs.tag_latest == 'true' && 'latest' || '' }}
 
 on:
   workflow_dispatch:
@@ -32,6 +32,11 @@ on:
         default: false
       push_appflowy_search:
         description: "Push AppFlowy Search image to registry"
+        type: boolean
+        required: false
+        default: false
+      push_admin_frontend:
+        description: "Build & push Admin Frontend image to registry"
         type: boolean
         required: false
         default: false
@@ -1105,6 +1110,7 @@ jobs:
 
   appflowy_admin_image:
     runs-on: ${{ matrix.job.os }}
+    if: ${{ github.event.inputs.push_admin_frontend == 'true' }}
     needs: [wait_for_all_builds]
     env:
       IMAGE_NAME: ${{ secrets.DOCKER_HUB_USERNAME }}/admin_frontend
@@ -1168,6 +1174,7 @@ jobs:
 
   appflowy_admin_manifest:
     runs-on: ubuntu-22.04
+    if: ${{ github.event.inputs.push_admin_frontend == 'true' }}
     needs: [appflowy_admin_image]
     steps:
       - name: Log in to Docker Hub
