@@ -1,5 +1,5 @@
 name: Self-Hosted AppFlowy Cloud Docker Images
-run-name: Build Self-Hosted ${{ github.event.inputs.custom_tag }} - Push ${{ github.event.inputs.push_appflowy_cloud == 'true' && '☁️' || '' }}${{ github.event.inputs.push_appflowy_ai == 'true' && '🤖' || '' }}${{ github.event.inputs.push_appflowy_search == 'true' && '🔍' || '' }} ${{ github.event.inputs.tag_latest == 'true' && 'latest' || '' }}
+run-name: Build Self-Hosted ${{ github.event.inputs.custom_tag }} - Push ${{ github.event.inputs.push_appflowy_cloud == 'true' && '☁️' || '' }}${{ github.event.inputs.build_gotrue == 'true' && '🔐' || '' }}${{ github.event.inputs.push_appflowy_ai == 'true' && '🤖' || '' }}${{ github.event.inputs.push_appflowy_search == 'true' && '🔍' || '' }} ${{ github.event.inputs.tag_latest == 'true' && 'latest' || '' }}
 
 on:
   workflow_dispatch:
@@ -16,8 +16,13 @@ on:
         description: "Custom tag to use (overrides automatic tag generation). Example: 0.9.8"
         required: true
         default: ""
+      build_gotrue:
+        description: "Build GoTrue (otherwise use the existing registry image for tests)"
+        type: boolean
+        required: false
+        default: false
       push_appflowy_cloud:
-        description: "Push AppFlowy Cloud, Worker & GoTrue images to registry"
+        description: "Push AppFlowy Cloud and Worker images (and GoTrue when built) to registry"
         type: boolean
         required: false
         default: false
@@ -58,6 +63,7 @@ env:
 
 jobs:
   gotrue_image:
+    if: ${{ github.event.inputs.build_gotrue == 'true' }}
     runs-on: ${{ matrix.job.os }}
     strategy:
       fail-fast: true
@@ -123,7 +129,7 @@ jobs:
         run: docker logout
   gotrue_push:
     runs-on: ubuntu-22.04
-    if: ${{ github.event.inputs.push_appflowy_cloud == 'true' }}
+    if: ${{ github.event.inputs.build_gotrue == 'true' && github.event.inputs.push_appflowy_cloud == 'true' }}
     needs: [gotrue_image]
     strategy:
       fail-fast: true
@@ -163,7 +169,7 @@ jobs:
 
   gotrue_manifest:
     runs-on: ubuntu-22.04
-    if: ${{ github.event.inputs.push_appflowy_cloud == 'true' }}
+    if: ${{ github.event.inputs.build_gotrue == 'true' && github.event.inputs.push_appflowy_cloud == 'true' }}
     needs: [gotrue_push]
     steps:
       - name: Log in to Docker Hub
@@ -277,8 +283,8 @@ jobs:
           echo "AppFlowy Worker build: ${{ needs.appflowy_worker_image.result }}"
           echo "AppFlowy AI build: ${{ needs.appflowy_ai_image.result }}"
 
-          # Check if any required builds failed (appflowy_search is optional)
-          if [[ "${{ needs.gotrue_image.result }}" == "failure" ]] || \
+          # GoTrue is optional; the remaining application images are required.
+          if [[ "${{ github.event.inputs.build_gotrue }}" == "true" && "${{ needs.gotrue_image.result }}" == "failure" ]] || \
              [[ "${{ needs.appflowy_cloud_image.result }}" == "failure" ]] || \
              [[ "${{ needs.appflowy_worker_image.result }}" == "failure" ]] || \
              [[ "${{ needs.appflowy_ai_image.result }}" == "failure" ]]; then
@@ -316,10 +322,21 @@ jobs:
           password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
 
       - name: Download GoTrue image (amd64)
+        if: ${{ github.event.inputs.build_gotrue == 'true' }}
         uses: actions/download-artifact@v4
         with:
           name: gotrue-image-amd64
           path: /tmp/docker-images
+
+      - name: Load GoTrue image locally
+        if: ${{ github.event.inputs.build_gotrue == 'true' }}
+        run: |
+          docker load < /tmp/docker-images/gotrue_amd64.tar.gz
+          docker load < /tmp/docker-images/gotrue_latest_amd64.tar.gz
+
+      - name: Pull GoTrue fallback image
+        if: ${{ github.event.inputs.build_gotrue != 'true' }}
+        run: docker pull appflowyinc/gotrue:${{ env.LATEST_TAG }}
 
       - name: Download AppFlowy Cloud image (amd64)
         uses: actions/download-artifact@v4
@@ -341,15 +358,19 @@ jobs:
 
       - name: Load all locally built images
         run: |
-          # Load all images since they're all built now
-          docker load < /tmp/docker-images/gotrue_amd64.tar.gz
-          docker load < /tmp/docker-images/gotrue_latest_amd64.tar.gz
+          # Load all locally built application images.
           docker load < /tmp/docker-images/appflowy_cloud_amd64.tar.gz
           docker load < /tmp/docker-images/appflowy_cloud_latest_amd64.tar.gz
           docker load < /tmp/docker-images/appflowy_worker_amd64.tar.gz
           docker load < /tmp/docker-images/appflowy_worker_latest_amd64.tar.gz
           docker load < /tmp/docker-images/appflowy_ai_amd64.tar.gz
           docker load < /tmp/docker-images/appflowy_ai_latest_amd64.tar.gz
+
+      - name: Retag GoTrue image
+        if: ${{ github.event.inputs.build_gotrue == 'true' }}
+        run: |
+          docker tag appflowyinc/gotrue:${{ env.GIT_TAG }}-amd64 appflowyinc/gotrue:${{ env.GIT_TAG }}
+          docker tag appflowyinc/gotrue:${{ env.LATEST_TAG }}-amd64 appflowyinc/gotrue:${{ env.LATEST_TAG }}
 
       - name: Run Docker Compose for testing
         run: |
@@ -358,12 +379,9 @@ jobs:
           export APPFLOWY_WORKER_VERSION=${{ env.GIT_TAG }}-amd64
           export APPFLOWY_AI_VERSION=${{ env.GIT_TAG }}-amd64
           export APPFLOWY_ADMIN_FRONTEND_VERSION=latest-amd64
+          export GOTRUE_VERSION=${{ env.LATEST_TAG }}
           
           # Retag all locally built images to match docker-compose-ci.yml image names
-          # Tag GoTrue
-          docker tag appflowyinc/gotrue:${{ env.GIT_TAG }}-amd64 appflowyinc/gotrue:${{ env.GIT_TAG }}
-          docker tag appflowyinc/gotrue:${{ env.LATEST_TAG }}-amd64 appflowyinc/gotrue:${{ env.LATEST_TAG }}
-          
           # Tag AppFlowy Cloud
           docker tag ${{ env.IMAGE_NAME }}:${{ env.GIT_TAG }}-amd64 appflowyinc/appflowy_cloud_premium:${{ env.GIT_TAG }}-amd64
           docker tag ${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}-amd64 appflowyinc/appflowy_cloud_premium:${{ env.LATEST_TAG }}-amd64
@@ -594,10 +612,21 @@ jobs:
           password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
 
       - name: Download GoTrue image (amd64)
+        if: ${{ github.event.inputs.build_gotrue == 'true' }}
         uses: actions/download-artifact@v4
         with:
           name: gotrue-image-amd64
           path: /tmp/docker-images
+
+      - name: Load GoTrue image locally
+        if: ${{ github.event.inputs.build_gotrue == 'true' }}
+        run: |
+          docker load < /tmp/docker-images/gotrue_amd64.tar.gz
+          docker load < /tmp/docker-images/gotrue_latest_amd64.tar.gz
+
+      - name: Pull GoTrue fallback image
+        if: ${{ github.event.inputs.build_gotrue != 'true' }}
+        run: docker pull appflowyinc/gotrue:${{ env.LATEST_TAG }}
 
       - name: Download AppFlowy Cloud image (amd64)
         uses: actions/download-artifact@v4
@@ -619,15 +648,19 @@ jobs:
 
       - name: Load all locally built images
         run: |
-          # Load all images since they're all built now
-          docker load < /tmp/docker-images/gotrue_amd64.tar.gz
-          docker load < /tmp/docker-images/gotrue_latest_amd64.tar.gz
+          # Load all locally built application images.
           docker load < /tmp/docker-images/appflowy_cloud_amd64.tar.gz
           docker load < /tmp/docker-images/appflowy_cloud_latest_amd64.tar.gz
           docker load < /tmp/docker-images/appflowy_worker_amd64.tar.gz
           docker load < /tmp/docker-images/appflowy_worker_latest_amd64.tar.gz
           docker load < /tmp/docker-images/appflowy_ai_amd64.tar.gz
           docker load < /tmp/docker-images/appflowy_ai_latest_amd64.tar.gz
+
+      - name: Retag GoTrue image
+        if: ${{ github.event.inputs.build_gotrue == 'true' }}
+        run: |
+          docker tag appflowyinc/gotrue:${{ env.GIT_TAG }}-amd64 appflowyinc/gotrue:${{ env.GIT_TAG }}
+          docker tag appflowyinc/gotrue:${{ env.LATEST_TAG }}-amd64 appflowyinc/gotrue:${{ env.LATEST_TAG }}
 
       - name: Run Docker Compose for testing
         run: |
@@ -636,12 +669,9 @@ jobs:
           export APPFLOWY_WORKER_VERSION=${{ env.GIT_TAG }}-amd64
           export APPFLOWY_AI_VERSION=${{ env.GIT_TAG }}-amd64
           export APPFLOWY_ADMIN_FRONTEND_VERSION=latest-amd64
+          export GOTRUE_VERSION=${{ env.LATEST_TAG }}
           
           # Retag all locally built images to match docker-compose-ci.yml image names
-          # Tag GoTrue
-          docker tag appflowyinc/gotrue:${{ env.GIT_TAG }}-amd64 appflowyinc/gotrue:${{ env.GIT_TAG }}
-          docker tag appflowyinc/gotrue:${{ env.LATEST_TAG }}-amd64 appflowyinc/gotrue:${{ env.LATEST_TAG }}
-          
           # Tag AppFlowy Cloud
           docker tag ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_cloud:${{ env.GIT_TAG }}-amd64 appflowyinc/appflowy_cloud_premium:${{ env.GIT_TAG }}-amd64
           docker tag ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_cloud:${{ env.LATEST_TAG }}-amd64 appflowyinc/appflowy_cloud_premium:${{ env.LATEST_TAG }}-amd64
