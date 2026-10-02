@@ -1,11 +1,15 @@
 name: Self-Hosted AppFlowy Cloud Docker Images
-run-name: Build Self-Hosted ${{ github.event.inputs.custom_tag }} - Push ${{ github.event.inputs.push_appflowy_cloud == 'true' && '☁️' || '' }}${{ github.event.inputs.build_gotrue == 'true' && '🔐' || '' }}${{ github.event.inputs.push_appflowy_ai == 'true' && '🤖' || '' }}${{ github.event.inputs.push_appflowy_search == 'true' && '🔍' || '' }} ${{ github.event.inputs.tag_latest == 'true' && 'latest' || '' }}
+run-name: Build Self-Hosted ${{ github.event.inputs.custom_tag }} - Push ${{ github.event.inputs.push_appflowy_cloud == 'true' && '☁️' || '' }}${{ github.event.inputs.push_gotrue == 'true' && '🔐' || '' }}${{ github.event.inputs.push_appflowy_ai == 'true' && '🤖' || '' }}${{ github.event.inputs.push_appflowy_search == 'true' && '🔍' || '' }} ${{ github.event.inputs.tag_latest == 'true' && 'latest' || '' }}
 
 on:
   workflow_dispatch:
     inputs:
       appflowy_cloud_branch:
-        description: "AppFlowy Cloud, Worker & GoTrue branch (from AppFlowy-Cloud-Premium)"
+        description: "AppFlowy Cloud, Worker & Search branch (from AppFlowy-Cloud-Premium)"
+        required: true
+        default: "main"
+      gotrue_branch:
+        description: "GoTrue branch (from AppFlowy-Cloud-Premium)"
         required: true
         default: "main"
       appflowy_ai_branch:
@@ -16,16 +20,16 @@ on:
         description: "Custom tag to use (overrides automatic tag generation). Example: 0.9.8"
         required: true
         default: ""
-      build_gotrue:
-        description: "Build GoTrue (otherwise use the existing registry image for tests)"
+      push_gotrue:
+        description: "Push GoTrue image to registry"
         type: boolean
         required: false
         default: false
       push_appflowy_cloud:
-        description: "Push AppFlowy Cloud and Worker images (and GoTrue when built) to registry"
+        description: "Push AppFlowy Cloud and Worker images to registry"
         type: boolean
         required: false
-        default: false
+        default: true
       push_appflowy_ai:
         description: "Push AppFlowy AI image to registry"
         type: boolean
@@ -35,7 +39,7 @@ on:
         description: "Push AppFlowy Search image to registry"
         type: boolean
         required: false
-        default: false
+        default: true
       build_arm64:
         description: "Also build ARM64 images (AMD64 always built)"
         type: boolean
@@ -63,7 +67,7 @@ env:
 
 jobs:
   gotrue_image:
-    if: ${{ github.event.inputs.build_gotrue == 'true' }}
+    if: ${{ github.event.inputs.push_gotrue == 'true' }}
     runs-on: ${{ matrix.job.os }}
     strategy:
       fail-fast: true
@@ -75,7 +79,7 @@ jobs:
         with:
           repository: AppFlowy-IO/AppFlowy-Cloud-Premium
           token: ${{ secrets.ADMIN_GITHUB_TOKEN }}
-          ref: ${{ github.event.inputs.appflowy_cloud_branch }}
+          ref: ${{ github.event.inputs.gotrue_branch }}
           fetch-depth: 1
 
       - name: Set up QEMU
@@ -91,13 +95,12 @@ jobs:
           echo "GIT_TAG=$T" >> $GITHUB_ENV
 
       - name: Log in to Docker Hub
-        if: ${{ github.event.inputs.push_appflowy_cloud == 'true' }}
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
 
-      - name: Build and Push GoTrue ${{ matrix.job.name }}
+      - name: Build GoTrue ${{ matrix.job.name }}
         uses: docker/build-push-action@v5
         with:
           context: ./docker/gotrue
@@ -129,7 +132,7 @@ jobs:
         run: docker logout
   gotrue_push:
     runs-on: ubuntu-22.04
-    if: ${{ github.event.inputs.build_gotrue == 'true' && github.event.inputs.push_appflowy_cloud == 'true' }}
+    if: ${{ github.event.inputs.push_gotrue == 'true' }}
     needs: [gotrue_image]
     strategy:
       fail-fast: true
@@ -169,7 +172,7 @@ jobs:
 
   gotrue_manifest:
     runs-on: ubuntu-22.04
-    if: ${{ github.event.inputs.build_gotrue == 'true' && github.event.inputs.push_appflowy_cloud == 'true' }}
+    if: ${{ github.event.inputs.push_gotrue == 'true' }}
     needs: [gotrue_push]
     steps:
       - name: Log in to Docker Hub
@@ -188,7 +191,7 @@ jobs:
         uses: Noelware/docker-manifest-action@0.4.3
         with:
           inputs: appflowyinc/gotrue:${{ env.GIT_TAG }}
-          images: appflowyinc/gotrue:${{ env.GIT_TAG }}-amd64,appflowyinc/gotrue:${{ env.GIT_TAG }}-arm64v8
+          images: appflowyinc/gotrue:${{ env.GIT_TAG }}-amd64${{ github.event.inputs.build_arm64 == 'true' && format(',appflowyinc/gotrue:{0}-arm64v8', env.GIT_TAG) || '' }}
           push: true
 
       - name: Create and push manifest for gotrue:latest
@@ -196,7 +199,7 @@ jobs:
         uses: Noelware/docker-manifest-action@0.4.3
         with:
           inputs: appflowyinc/gotrue:${{ env.LATEST_TAG }}
-          images: appflowyinc/gotrue:${{ env.LATEST_TAG }}-amd64,appflowyinc/gotrue:${{ env.LATEST_TAG }}-arm64v8
+          images: appflowyinc/gotrue:${{ env.LATEST_TAG }}-amd64${{ github.event.inputs.build_arm64 == 'true' && format(',appflowyinc/gotrue:{0}-arm64v8', env.LATEST_TAG) || '' }}
           push: true
 
       - name: Logout from Docker Hub
@@ -284,19 +287,21 @@ jobs:
           echo "AppFlowy AI build: ${{ needs.appflowy_ai_image.result }}"
 
           # GoTrue is optional; the remaining application images are required.
-          if [[ "${{ github.event.inputs.build_gotrue }}" == "true" && "${{ needs.gotrue_image.result }}" == "failure" ]] || \
-             [[ "${{ needs.appflowy_cloud_image.result }}" == "failure" ]] || \
-             [[ "${{ needs.appflowy_worker_image.result }}" == "failure" ]] || \
-             [[ "${{ needs.appflowy_ai_image.result }}" == "failure" ]]; then
-            echo "❌ One or more required builds failed"
+          if [[ "${{ github.event.inputs.push_gotrue }}" == "true" && "${{ needs.gotrue_image.result }}" != "success" ]] || \
+             [[ "${{ needs.appflowy_cloud_image.result }}" != "success" ]] || \
+             [[ "${{ needs.appflowy_worker_image.result }}" != "success" ]] || \
+             [[ "${{ needs.appflowy_ai_image.result }}" != "success" ]]; then
+            echo "❌ One or more required builds did not succeed"
             exit 1
           else
-            echo "✅ All required builds completed successfully or were skipped"
+            echo "✅ All required builds completed successfully"
           fi
 
+  # Jobs downstream of optional GoTrue must override the implicit success() check
+  # and require their direct prerequisite to succeed, even when GoTrue is skipped.
   appflowy_cloud_test:
     runs-on: ubuntu-22.04
-    if: ${{ github.event.inputs.push_appflowy_cloud == 'true' }}
+    if: ${{ !cancelled() && needs.wait_for_all_builds.result == 'success' && github.event.inputs.push_appflowy_cloud == 'true' }}
     needs: [wait_for_all_builds]
     env:
       IMAGE_NAME: ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_cloud
@@ -322,20 +327,20 @@ jobs:
           password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
 
       - name: Download GoTrue image (amd64)
-        if: ${{ github.event.inputs.build_gotrue == 'true' }}
+        if: ${{ github.event.inputs.push_gotrue == 'true' }}
         uses: actions/download-artifact@v4
         with:
           name: gotrue-image-amd64
           path: /tmp/docker-images
 
       - name: Load GoTrue image locally
-        if: ${{ github.event.inputs.build_gotrue == 'true' }}
+        if: ${{ github.event.inputs.push_gotrue == 'true' }}
         run: |
           docker load < /tmp/docker-images/gotrue_amd64.tar.gz
           docker load < /tmp/docker-images/gotrue_latest_amd64.tar.gz
 
       - name: Pull GoTrue fallback image
-        if: ${{ github.event.inputs.build_gotrue != 'true' }}
+        if: ${{ github.event.inputs.push_gotrue != 'true' }}
         run: docker pull appflowyinc/gotrue:${{ env.LATEST_TAG }}
 
       - name: Download AppFlowy Cloud image (amd64)
@@ -367,7 +372,7 @@ jobs:
           docker load < /tmp/docker-images/appflowy_ai_latest_amd64.tar.gz
 
       - name: Retag GoTrue image
-        if: ${{ github.event.inputs.build_gotrue == 'true' }}
+        if: ${{ github.event.inputs.push_gotrue == 'true' }}
         run: |
           docker tag appflowyinc/gotrue:${{ env.GIT_TAG }}-amd64 appflowyinc/gotrue:${{ env.GIT_TAG }}
           docker tag appflowyinc/gotrue:${{ env.LATEST_TAG }}-amd64 appflowyinc/gotrue:${{ env.LATEST_TAG }}
@@ -440,7 +445,7 @@ jobs:
 
   appflowy_cloud_push:
     runs-on: ubuntu-22.04
-    if: ${{ github.event.inputs.push_appflowy_cloud == 'true' }}
+    if: ${{ !cancelled() && needs.appflowy_cloud_test.result == 'success' && github.event.inputs.push_appflowy_cloud == 'true' }}
     needs: [appflowy_cloud_test]
     env:
       IMAGE_NAME: ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_cloud
@@ -482,7 +487,7 @@ jobs:
 
   appflowy_cloud_manifest:
     runs-on: ubuntu-22.04
-    if: ${{ github.event.inputs.push_appflowy_cloud == 'true' }}
+    if: ${{ !cancelled() && needs.appflowy_cloud_push.result == 'success' && github.event.inputs.push_appflowy_cloud == 'true' }}
     needs: [appflowy_cloud_push]
     steps:
       - name: Log in to Docker Hub
@@ -586,7 +591,7 @@ jobs:
 
   appflowy_ai_test:
     runs-on: ubuntu-22.04
-    if: ${{ github.event.inputs.push_appflowy_ai == 'true' }}
+    if: ${{ !cancelled() && needs.wait_for_all_builds.result == 'success' && github.event.inputs.push_appflowy_ai == 'true' }}
     needs: [wait_for_all_builds]
     env:
       IMAGE_NAME: ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_ai
@@ -612,20 +617,20 @@ jobs:
           password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
 
       - name: Download GoTrue image (amd64)
-        if: ${{ github.event.inputs.build_gotrue == 'true' }}
+        if: ${{ github.event.inputs.push_gotrue == 'true' }}
         uses: actions/download-artifact@v4
         with:
           name: gotrue-image-amd64
           path: /tmp/docker-images
 
       - name: Load GoTrue image locally
-        if: ${{ github.event.inputs.build_gotrue == 'true' }}
+        if: ${{ github.event.inputs.push_gotrue == 'true' }}
         run: |
           docker load < /tmp/docker-images/gotrue_amd64.tar.gz
           docker load < /tmp/docker-images/gotrue_latest_amd64.tar.gz
 
       - name: Pull GoTrue fallback image
-        if: ${{ github.event.inputs.build_gotrue != 'true' }}
+        if: ${{ github.event.inputs.push_gotrue != 'true' }}
         run: docker pull appflowyinc/gotrue:${{ env.LATEST_TAG }}
 
       - name: Download AppFlowy Cloud image (amd64)
@@ -657,7 +662,7 @@ jobs:
           docker load < /tmp/docker-images/appflowy_ai_latest_amd64.tar.gz
 
       - name: Retag GoTrue image
-        if: ${{ github.event.inputs.build_gotrue == 'true' }}
+        if: ${{ github.event.inputs.push_gotrue == 'true' }}
         run: |
           docker tag appflowyinc/gotrue:${{ env.GIT_TAG }}-amd64 appflowyinc/gotrue:${{ env.GIT_TAG }}
           docker tag appflowyinc/gotrue:${{ env.LATEST_TAG }}-amd64 appflowyinc/gotrue:${{ env.LATEST_TAG }}
@@ -751,7 +756,7 @@ jobs:
 
   appflowy_ai_push:
     runs-on: ubuntu-22.04
-    if: ${{ github.event.inputs.push_appflowy_ai == 'true' }}
+    if: ${{ !cancelled() && needs.appflowy_ai_test.result == 'success' && github.event.inputs.push_appflowy_ai == 'true' }}
     needs: [appflowy_ai_test]
     env:
       IMAGE_NAME: ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_ai
@@ -793,7 +798,7 @@ jobs:
 
   appflowy_ai_manifest:
     runs-on: ubuntu-22.04
-    if: ${{ github.event.inputs.push_appflowy_ai == 'true' }}
+    if: ${{ !cancelled() && needs.appflowy_ai_push.result == 'success' && github.event.inputs.push_appflowy_ai == 'true' }}
     needs: [appflowy_ai_push]
     steps:
       - name: Log in to Docker Hub
@@ -975,7 +980,7 @@ jobs:
 
   appflowy_worker_push:
     runs-on: ubuntu-22.04
-    if: ${{ github.event.inputs.push_appflowy_cloud == 'true' }}
+    if: ${{ !cancelled() && needs.wait_for_all_builds.result == 'success' && github.event.inputs.push_appflowy_cloud == 'true' }}
     needs: [wait_for_all_builds]
     env:
       IMAGE_NAME: ${{ secrets.DOCKER_HUB_USERNAME }}/appflowy_worker
@@ -1017,7 +1022,7 @@ jobs:
 
   appflowy_worker_manifest:
     runs-on: ubuntu-22.04
-    if: ${{ github.event.inputs.push_appflowy_cloud == 'true' }}
+    if: ${{ !cancelled() && needs.appflowy_worker_push.result == 'success' && github.event.inputs.push_appflowy_cloud == 'true' }}
     needs: [ appflowy_worker_push ]
     steps:
       - name: Log in to Docker Hub
