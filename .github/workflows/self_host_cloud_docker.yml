@@ -433,7 +433,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v4
+        uses: docker/metadata-action@v5
         with:
           images: registry.hub.docker.com/${{ env.IMAGE_NAME }}
 
@@ -748,7 +748,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v4
+        uses: docker/metadata-action@v5
         with:
           images: registry.hub.docker.com/${{ env.IMAGE_NAME }}
 
@@ -1059,7 +1059,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v4
+        uses: docker/metadata-action@v5
         with:
           images: registry.hub.docker.com/${{ env.IMAGE_NAME }}
 
@@ -1133,7 +1133,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v4
+        uses: docker/metadata-action@v5
         with:
           images: registry.hub.docker.com/${{ env.IMAGE_NAME }}
 
@@ -1154,6 +1154,7 @@ jobs:
           provenance: false
           build-args: |
             PROFILE=release
+            FEATURES=${{ env.CI_APPFLOWY_CLOUD_FEATURES }}
             APP_VERSION=${{ env.GIT_TAG }}
 
       - name: Save AppFlowy Search image locally
