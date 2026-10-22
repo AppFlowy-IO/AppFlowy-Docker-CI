@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       appflowy_cloud_branch:
-        description: "AppFlowy Cloud, Worker, Search & Backup branch (from AppFlowy-Cloud-Premium)"
+        description: "AppFlowy Cloud, Worker, Search, AI & Backup branch (from AppFlowy-Cloud-Premium)"
         required: true
         default: "main"
       gotrue_branch:
@@ -13,7 +13,7 @@ on:
         required: true
         default: "main"
       appflowy_ai_branch:
-        description: "AppFlowy AI branch (from AppFlowy-AI-Premium)"
+        description: "Deprecated and ignored: the AI image builds from appflowy_cloud_branch (services/appflowy-ai)"
         required: true
         default: "main"
       custom_tag:
@@ -729,9 +729,9 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@v4
         with:
-          repository: AppFlowy-IO/AppFlowy-AI-Premium
+          repository: AppFlowy-IO/AppFlowy-Cloud-Premium
           token: ${{ secrets.ADMIN_GITHUB_TOKEN }}
-          ref: ${{ github.event.inputs.appflowy_ai_branch }}
+          ref: ${{ github.event.inputs.appflowy_cloud_branch }}
           fetch-depth: 1
 
       - name: Set up QEMU
@@ -757,12 +757,11 @@ jobs:
           echo "::group::build-appflowy-ai-${{ matrix.job.name }}"
           docker buildx build \
             --platform ${{ matrix.job.docker_platform }} \
-            -f ./Dockerfile \
+            -f ./services/appflowy-ai/Dockerfile \
             -t ${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}-${{ matrix.job.name }} \
             -t ${{ env.IMAGE_NAME }}:${{ env.GIT_TAG }}-${{ matrix.job.name }} \
             --cache-from type=gha,scope=appflowy_ai-${{ matrix.job.name }} \
             --cache-to type=gha,mode=max,scope=appflowy_ai-${{ matrix.job.name }} \
-            --build-arg GITHUB_TOKEN=${{ secrets.ADMIN_GITHUB_TOKEN }} \
             --build-arg PROFILE=release \
             --build-arg FEATURES=${{ env.CI_APPFLOWY_CLOUD_FEATURES }} \
             --build-arg APP_VERSION=${{ env.GIT_TAG }} \
