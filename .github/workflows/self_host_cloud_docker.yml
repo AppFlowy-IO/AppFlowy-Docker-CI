@@ -1330,6 +1330,57 @@ jobs:
         if: always()
         run: docker logout
 
+  notify_selfhost:
+    name: Notify self-hosted deployment of published images
+    if: ${{ !cancelled() && github.repository == 'AppFlowy-IO/AppFlowy-Docker-CI' && !endsWith(inputs.custom_tag, '_test') }}
+    needs: [gotrue_manifest, appflowy_cloud_manifest, appflowy_ai_manifest, appflowy_worker_manifest, appflowy_search_manifest, appflowy_backup_manifest]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Request an image-pin update after every selected manifest succeeds
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          IMAGE_TAG: ${{ inputs.custom_tag }}
+          PUBLISH_RESULTS: ${{ toJSON(needs) }}
+          PUBLISH_GOTRUE: ${{ inputs.push_gotrue }}
+          PUBLISH_CLOUD: ${{ inputs.push_appflowy_cloud }}
+          PUBLISH_AI: ${{ inputs.push_appflowy_ai }}
+          PUBLISH_SEARCH: ${{ inputs.push_appflowy_search }}
+          PUBLISH_BACKUP: ${{ inputs.push_appflowy_backup }}
+        with:
+          github-token: ${{ secrets.PUBLIC_REPO_TOKEN }}
+          script: |
+            const tag = process.env.IMAGE_TAG;
+            if (tag.endsWith('_test')) return;
+            const results = JSON.parse(process.env.PUBLISH_RESULTS);
+            const selected = [
+              ['PUBLISH_GOTRUE', 'gotrue', 'gotrue_manifest'],
+              ['PUBLISH_CLOUD', 'appflowy_cloud', 'appflowy_cloud_manifest'],
+              ['PUBLISH_CLOUD', 'appflowy_worker', 'appflowy_worker_manifest'],
+              ['PUBLISH_AI', 'ai', 'appflowy_ai_manifest'],
+              ['PUBLISH_SEARCH', 'appflowy_search', 'appflowy_search_manifest'],
+              ['PUBLISH_BACKUP', 'appflowy_backup', 'appflowy_backup_manifest'],
+            ].filter(([flag]) => process.env[flag] === 'true');
+            if (!selected.length) return;
+            for (const [, service, job] of selected) {
+              if (results[job]?.result !== 'success') {
+                core.notice(`No deployment update: ${service} was not successfully published.`);
+                return;
+              }
+            }
+            await github.rest.repos.createDispatchEvent({
+              owner: 'AppFlowy-IO',
+              repo: 'AppFlowy-SelfHost-Commercial',
+              event_type: 'selfhost-images-published',
+              client_payload: {
+                source: 'cloud', tag,
+                services: selected.map(([, service]) => service),
+                source_repository: `${context.repo.owner}/${context.repo.repo}`,
+                source_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              },
+            });
+
   cleanup_artifacts:
     runs-on: ubuntu-22.04
     if: always()
