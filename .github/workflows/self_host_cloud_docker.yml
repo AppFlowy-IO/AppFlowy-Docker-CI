@@ -41,7 +41,7 @@ on:
         required: false
         default: true
       push_appflowy_backup:
-        description: "Build and publish the optional AppFlowy Backup image"
+        description: "Build and publish AppFlowy Backup for PostgreSQL 16, 17 and 18"
         type: boolean
         required: false
         default: false
@@ -72,7 +72,7 @@ env:
 
 jobs:
   # Backup has its own opt-in chain: skipped application test jobs must not block
-  # its manifest, and both native architectures must use the same source commit.
+  # its manifests, and every PostgreSQL variant must use the same source commit.
   appflowy_backup_prepare:
     if: ${{ inputs.push_appflowy_backup }}
     runs-on: ubuntu-22.04
@@ -81,6 +81,7 @@ jobs:
     outputs:
       source_sha: ${{ steps.source.outputs.sha }}
       version: ${{ steps.source.outputs.version }}
+      postgres_variants: ${{ steps.source.outputs.postgres_variants }}
     steps:
       - name: Check out the selected Backup source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -96,24 +97,30 @@ jobs:
         env:
           CUSTOM_TAG: ${{ inputs.custom_tag }}
         run: |
-          if [[ ! "$CUSTOM_TAG" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$ || ${#CUSTOM_TAG} -gt 120 ]]; then
-            echo '::error::Backup version must be a valid Docker tag with room for architecture suffixes'
+          if [[ ! "$CUSTOM_TAG" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$ || ${#CUSTOM_TAG} -gt 115 ]]; then
+            echo '::error::Backup version must be a valid Docker tag with room for PostgreSQL and architecture suffixes'
             exit 1
           fi
           printf 'sha=%s\nversion=%s\n' "$(git rev-parse --verify HEAD)" "$CUSTOM_TAG" >> "$GITHUB_OUTPUT"
+          # PG16 retains ordinary tags; newer staging servers need distinct tags.
+          printf 'postgres_variants=%s\n' \
+            '[{"major":16,"suffix":""},{"major":17,"suffix":"-pg17"},{"major":18,"suffix":"-pg18"}]' >> "$GITHUB_OUTPUT"
 
   appflowy_backup_image:
+    name: Build Backup (PG${{ matrix.postgres.major }}, ${{ matrix.platform.arch }})
     if: ${{ inputs.push_appflowy_backup }}
     needs: appflowy_backup_prepare
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.platform.runner }}
     permissions:
       contents: read
     env:
       IMAGE_NAME: appflowyinc/appflowy_backup
+      POSTGRES_MAJOR: ${{ matrix.postgres.major }}
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.build_arm64 && '[{"arch":"amd64","runner":"ubuntu-22.04"},{"arch":"arm64v8","runner":"ubuntu-24.04-arm"}]' || '[{"arch":"amd64","runner":"ubuntu-22.04"}]') }}
+        postgres: ${{ fromJSON(needs.appflowy_backup_prepare.outputs.postgres_variants) }}
+        platform: ${{ fromJSON(inputs.build_arm64 && '[{"arch":"amd64","runner":"ubuntu-22.04"},{"arch":"arm64v8","runner":"ubuntu-24.04-arm"}]' || '[{"arch":"amd64","runner":"ubuntu-22.04"}]') }}
     steps:
       - name: Check out the resolved Backup source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -127,7 +134,7 @@ jobs:
       - name: Verify native build architecture
         id: platform
         env:
-          ARCH: ${{ matrix.arch }}
+          ARCH: ${{ matrix.platform.arch }}
         run: |
           case "$ARCH:$(uname -m)" in
             amd64:x86_64) platform=linux/amd64 ;;
@@ -157,9 +164,9 @@ jobs:
           target: backup
           platforms: ${{ steps.platform.outputs.value }}
           push: true
-          tags: ${{ env.IMAGE_NAME }}:${{ needs.appflowy_backup_prepare.outputs.version }}-${{ matrix.arch }}
+          tags: ${{ env.IMAGE_NAME }}:${{ needs.appflowy_backup_prepare.outputs.version }}${{ matrix.postgres.suffix }}-${{ matrix.platform.arch }}
           build-args: |
-            POSTGRES_MAJOR=16
+            POSTGRES_MAJOR=${{ env.POSTGRES_MAJOR }}
             BACKUP_BUILD_JOBS=2
           labels: |
             org.opencontainers.image.source=https://github.com/AppFlowy-IO/AppFlowy-Cloud-Premium
@@ -173,25 +180,26 @@ jobs:
           DIGEST: ${{ steps.image.outputs.digest }}
         run: |
           [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo '::error::Invalid Backup image digest'; exit 1; }
-          docker run --rm --network none --entrypoint sh "$IMAGE_NAME@$DIGEST" -e -c '
+          docker run --rm --network none --entrypoint sh --env POSTGRES_MAJOR "$IMAGE_NAME@$DIGEST" -e -c '
             test "$(id -u)" != 0
             test -x /usr/local/bin/docker-entrypoint.sh
-            postgres --version | grep -E "PostgreSQL[)] 16[.]"
-            pg_dump --version | grep -E "PostgreSQL[)] 16[.]"
+            for tool in postgres pg_dump pg_restore; do
+              "$tool" --version | grep -E "PostgreSQL[)] ${POSTGRES_MAJOR}[.]"
+            done
             pgbackrest version
             docker --version
             docker compose version
             appflowy_backup --help
           '
           test "$(docker image inspect "$IMAGE_NAME@$DIGEST" --format '{{json .Config.Entrypoint}}')" = '["appflowy_backup","service"]'
-          mkdir -p "$RUNNER_TEMP/backup-digests"
-          printf '%s\n' "$DIGEST" > "$RUNNER_TEMP/backup-digests/${{ matrix.arch }}"
+          mkdir -p "$RUNNER_TEMP/backup-digests/$POSTGRES_MAJOR"
+          printf '%s\n' "$DIGEST" > "$RUNNER_TEMP/backup-digests/$POSTGRES_MAJOR/${{ matrix.platform.arch }}"
 
       - name: Upload the verified Backup digest
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: backup-digest-${{ matrix.arch }}
-          path: ${{ runner.temp }}/backup-digests/${{ matrix.arch }}
+          name: backup-digest-pg${{ matrix.postgres.major }}-${{ matrix.platform.arch }}
+          path: ${{ runner.temp }}/backup-digests/${{ matrix.postgres.major }}/${{ matrix.platform.arch }}
           if-no-files-found: error
           overwrite: true
           retention-days: 1
@@ -201,19 +209,26 @@ jobs:
         run: docker logout
 
   appflowy_backup_manifest:
+    name: Publish Backup manifest (PG${{ matrix.postgres.major }})
     if: ${{ inputs.push_appflowy_backup }}
     needs: [appflowy_backup_prepare, appflowy_backup_image]
     runs-on: ubuntu-22.04
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ${{ fromJSON(needs.appflowy_backup_prepare.outputs.postgres_variants) }}
     env:
       IMAGE_NAME: appflowyinc/appflowy_backup
-      IMAGE_TAG: ${{ needs.appflowy_backup_prepare.outputs.version }}
+      IMAGE_TAG: ${{ needs.appflowy_backup_prepare.outputs.version }}${{ matrix.postgres.suffix }}
+      LATEST_TAG: latest${{ matrix.postgres.suffix }}
+      POSTGRES_MAJOR: ${{ matrix.postgres.major }}
     steps:
       - name: Download verified Backup digests from this run
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          pattern: backup-digest-*
+          pattern: backup-digest-pg${{ matrix.postgres.major }}-*
           path: ${{ runner.temp }}/backup-digests
           merge-multiple: true
 
@@ -240,18 +255,18 @@ jobs:
             sources+=("$IMAGE_NAME@$digest")
           done
           tags=(--tag "$IMAGE_NAME:$IMAGE_TAG")
-          if [[ "$TAG_LATEST" == true ]]; then tags+=(--tag "$IMAGE_NAME:latest"); fi
+          if [[ "$TAG_LATEST" == true ]]; then tags+=(--tag "$IMAGE_NAME:$LATEST_TAG"); fi
           docker buildx imagetools create "${tags[@]}" "${sources[@]}"
           if [[ "$TAG_LATEST" == true ]]; then
             for arch in "${architectures[@]}"; do
               digest="$(cat "$RUNNER_TEMP/backup-digests/$arch")"
-              docker buildx imagetools create --tag "$IMAGE_NAME:latest-$arch" "$IMAGE_NAME@$digest"
+              docker buildx imagetools create --tag "$IMAGE_NAME:$LATEST_TAG-$arch" "$IMAGE_NAME@$digest"
             done
           fi
           {
             printf '### Published %s:%s\n\n' "$IMAGE_NAME" "$IMAGE_TAG"
             printf -- '- Source commit: %s\n' '${{ needs.appflowy_backup_prepare.outputs.source_sha }}'
-            printf -- '- PostgreSQL tools: 16; production target: backup\n'
+            printf -- '- PostgreSQL tools: %s; production target: backup\n' "$POSTGRES_MAJOR"
             for arch in "${architectures[@]}"; do
               printf -- '- %s:%s-%s\n' "$IMAGE_NAME" "$IMAGE_TAG" "$arch"
             done
