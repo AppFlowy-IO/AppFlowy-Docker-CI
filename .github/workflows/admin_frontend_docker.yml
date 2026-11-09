@@ -149,3 +149,33 @@ jobs:
       - name: Logout from Docker Hub
         if: always()
         run: docker logout
+
+  notify_selfhost:
+    name: Notify self-hosted deployment of published Admin image
+    # The commercial deployment uses the public image and requires both architectures.
+    if: ${{ github.repository == 'AppFlowy-IO/AppFlowy-Docker-CI' && inputs.push_public && inputs.build_arm64 && !endsWith(inputs.tag_name, '_test') }}
+    needs: [admin_frontend_manifest]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Request an Admin image-pin update after manifest publication
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          IMAGE_TAG: ${{ inputs.tag_name }}
+        with:
+          github-token: ${{ secrets.PUBLIC_REPO_TOKEN }}
+          script: |
+            const tag = process.env.IMAGE_TAG;
+            if (tag.endsWith('_test')) return;
+            await github.rest.repos.createDispatchEvent({
+              owner: 'AppFlowy-IO',
+              repo: 'AppFlowy-SelfHost-Commercial',
+              event_type: 'selfhost-images-published',
+              client_payload: {
+                source: 'admin', tag,
+                services: ['admin_frontend'],
+                source_repository: `${context.repo.owner}/${context.repo.repo}`,
+                source_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              },
+            });
