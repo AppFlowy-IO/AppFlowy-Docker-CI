@@ -1,5 +1,5 @@
 name: Self-Hosted AppFlowy Cloud Docker Images
-run-name: Build Self-Hosted ${{ github.event.inputs.custom_tag }} - Push ${{ github.event.inputs.push_appflowy_cloud == 'true' && '☁️' || '' }}${{ github.event.inputs.push_gotrue == 'true' && '🔐' || '' }}${{ github.event.inputs.push_appflowy_ai == 'true' && '🤖' || '' }}${{ github.event.inputs.push_appflowy_search == 'true' && '🔍' || '' }}${{ github.event.inputs.push_appflowy_backup == 'true' && '💾' || '' }} ${{ github.event.inputs.tag_latest == 'true' && 'latest' || '' }}
+run-name: Build Self-Hosted ${{ github.event.inputs.custom_tag }} - Push ${{ github.event.inputs.push_appflowy_cloud == 'true' && '☁️' || '' }}${{ github.event.inputs.push_gotrue == 'true' && '🔐' || '' }}${{ github.event.inputs.push_appflowy_ai == 'true' && '🤖' || '' }}${{ github.event.inputs.push_appflowy_search == 'true' && '🔍' || '' }}${{ github.event.inputs.push_appflowy_mcp == 'true' && '🔌' || '' }}${{ github.event.inputs.push_appflowy_backup == 'true' && '💾' || '' }} ${{ github.event.inputs.tag_latest == 'true' && 'latest' || '' }}
 
 on:
   workflow_dispatch:
@@ -37,6 +37,11 @@ on:
         default: false
       push_appflowy_search:
         description: "Push AppFlowy Search image to registry"
+        type: boolean
+        required: false
+        default: true
+      push_appflowy_mcp:
+        description: "Build and publish AppFlowy MCP (from appflowy_cloud_branch)"
         type: boolean
         required: false
         default: true
@@ -1345,10 +1350,207 @@ jobs:
         if: always()
         run: docker logout
 
+  # MCP has its own chain, like Backup: both architectures build one resolved source commit,
+  # and the manifest summary names it for the deployment repository's MCP review.
+  appflowy_mcp_prepare:
+    if: ${{ inputs.push_appflowy_mcp }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    outputs:
+      source_sha: ${{ steps.source.outputs.sha }}
+      version: ${{ steps.source.outputs.version }}
+    steps:
+      - name: Check out the selected MCP source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: AppFlowy-IO/AppFlowy-Cloud-Premium
+          token: ${{ secrets.ADMIN_GITHUB_TOKEN }}
+          ref: ${{ inputs.appflowy_cloud_branch }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Resolve MCP source and validate version
+        id: source
+        env:
+          CUSTOM_TAG: ${{ inputs.custom_tag }}
+        run: |
+          if [[ ! "$CUSTOM_TAG" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$ || ${#CUSTOM_TAG} -gt 120 ]]; then
+            echo '::error::MCP version must be a valid Docker tag with room for the architecture suffix'
+            exit 1
+          fi
+          printf 'sha=%s\nversion=%s\n' "$(git rev-parse --verify HEAD)" "$CUSTOM_TAG" >> "$GITHUB_OUTPUT"
+
+  appflowy_mcp_image:
+    name: Build MCP (${{ matrix.platform.arch }})
+    if: ${{ inputs.push_appflowy_mcp }}
+    needs: appflowy_mcp_prepare
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    env:
+      IMAGE_NAME: appflowyinc/appflowy_mcp
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(inputs.build_arm64 && '[{"arch":"amd64","runner":"ubuntu-22.04"},{"arch":"arm64v8","runner":"ubuntu-24.04-arm"}]' || '[{"arch":"amd64","runner":"ubuntu-22.04"}]') }}
+    steps:
+      - name: Check out the resolved MCP source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: AppFlowy-IO/AppFlowy-Cloud-Premium
+          token: ${{ secrets.ADMIN_GITHUB_TOKEN }}
+          ref: ${{ needs.appflowy_mcp_prepare.outputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify native build architecture
+        id: platform
+        env:
+          ARCH: ${{ matrix.platform.arch }}
+        run: |
+          case "$ARCH:$(uname -m)" in
+            amd64:x86_64) platform=linux/amd64 ;;
+            arm64v8:aarch64) platform=linux/arm64 ;;
+            *) echo '::error::MCP platform does not match its native runner'; exit 1 ;;
+          esac
+          printf 'value=%s\n' "$platform" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+
+      # Keep private-source builder layers and build records out of this public repository.
+      - name: Build and publish the self-hosted MCP image
+        id: image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
+        with:
+          context: .
+          file: services/appflowy-mcp/Dockerfile
+          platforms: ${{ steps.platform.outputs.value }}
+          push: true
+          tags: ${{ env.IMAGE_NAME }}:${{ needs.appflowy_mcp_prepare.outputs.version }}-${{ matrix.platform.arch }}
+          # The feature selects the self-hosted policy at compile time, as for Cloud, Worker and Search.
+          build-args: |
+            FEATURES=${{ env.CI_APPFLOWY_CLOUD_FEATURES }}
+            APP_VERSION=${{ needs.appflowy_mcp_prepare.outputs.version }}
+            CARGO_BUILD_JOBS=2
+          labels: |
+            org.opencontainers.image.source=https://github.com/AppFlowy-IO/AppFlowy-Cloud-Premium
+            org.opencontainers.image.revision=${{ needs.appflowy_mcp_prepare.outputs.source_sha }}
+            org.opencontainers.image.version=${{ needs.appflowy_mcp_prepare.outputs.version }}
+          provenance: false
+          pull: true
+
+      # No other check runs the ARM64 image. The deployments start the default command and
+      # probe readiness with curl.
+      - name: Check the MCP image on the native runner
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+          ARCH: ${{ matrix.platform.arch }}
+        run: |
+          [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo '::error::Invalid MCP image digest'; exit 1; }
+          docker run --rm --network none --entrypoint sh "$IMAGE_NAME@$DIGEST" -e -c '
+            # An invalid port stops the service at startup, before it needs any dependency:
+            # status 1 is its own refusal, not a loader failure, a crash or a hang.
+            status=0
+            RUST_BACKTRACE=0 APPFLOWY_APPLICATION_PORT=invalid timeout 30 appflowy_mcp || status=$?
+            test "$status" = 1
+            curl --version
+          '
+          docker image inspect "$IMAGE_NAME@$DIGEST" --format '{{json .Config.Entrypoint}} {{json .Config.Cmd}}' \
+            | grep -F appflowy_mcp
+          mkdir -p "$RUNNER_TEMP/mcp-digests"
+          printf '%s\n' "$DIGEST" > "$RUNNER_TEMP/mcp-digests/$ARCH"
+
+      - name: Upload the verified MCP digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: mcp-digest-${{ matrix.platform.arch }}
+          path: ${{ runner.temp }}/mcp-digests/${{ matrix.platform.arch }}
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 1
+
+      - name: Logout from Docker Hub
+        if: always()
+        run: docker logout
+
+  appflowy_mcp_manifest:
+    name: Publish MCP manifest
+    if: ${{ inputs.push_appflowy_mcp }}
+    needs: [appflowy_mcp_prepare, appflowy_mcp_image]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    env:
+      IMAGE_NAME: appflowyinc/appflowy_mcp
+      IMAGE_TAG: ${{ needs.appflowy_mcp_prepare.outputs.version }}
+      SOURCE_SHA: ${{ needs.appflowy_mcp_prepare.outputs.source_sha }}
+    steps:
+      - name: Download verified MCP digests from this run
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: mcp-digest-*
+          path: ${{ runner.temp }}/mcp-digests
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+
+      - name: Publish the MCP version and optional latest manifest
+        env:
+          BUILD_ARM64: ${{ inputs.build_arm64 }}
+          TAG_LATEST: ${{ inputs.tag_latest }}
+        run: |
+          architectures=(amd64)
+          if [[ "$BUILD_ARM64" == true ]]; then architectures+=(arm64v8); fi
+          sources=()
+          for arch in "${architectures[@]}"; do
+            digest="$(cat "$RUNNER_TEMP/mcp-digests/$arch")"
+            [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo '::error::Invalid MCP image digest'; exit 1; }
+            sources+=("$IMAGE_NAME@$digest")
+          done
+          tags=(--tag "$IMAGE_NAME:$IMAGE_TAG")
+          if [[ "$TAG_LATEST" == true ]]; then tags+=(--tag "$IMAGE_NAME:$LATEST_TAG"); fi
+          docker buildx imagetools create "${tags[@]}" "${sources[@]}"
+          if [[ "$TAG_LATEST" == true ]]; then
+            for arch in "${architectures[@]}"; do
+              digest="$(cat "$RUNNER_TEMP/mcp-digests/$arch")"
+              docker buildx imagetools create --tag "$IMAGE_NAME:$LATEST_TAG-$arch" "$IMAGE_NAME@$digest"
+            done
+          fi
+          {
+            printf '### Published %s:%s\n\n' "$IMAGE_NAME" "$IMAGE_TAG"
+            printf -- '- Source commit: %s\n' "$SOURCE_SHA"
+            printf -- '- Cargo features: %s\n' "$CI_APPFLOWY_CLOUD_FEATURES"
+            for arch in "${architectures[@]}"; do
+              printf -- '- %s:%s-%s\n' "$IMAGE_NAME" "$IMAGE_TAG" "$arch"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Logout from Docker Hub
+        if: always()
+        run: docker logout
+
   notify_selfhost:
     name: Notify self-hosted deployment of published images
     if: ${{ !cancelled() && github.repository == 'AppFlowy-IO/AppFlowy-Docker-CI' && !endsWith(inputs.custom_tag, '_test') }}
-    needs: [gotrue_manifest, appflowy_cloud_manifest, appflowy_ai_manifest, appflowy_worker_manifest, appflowy_search_manifest, appflowy_backup_manifest]
+    needs: [gotrue_manifest, appflowy_cloud_manifest, appflowy_ai_manifest, appflowy_worker_manifest, appflowy_search_manifest, appflowy_mcp_manifest, appflowy_backup_manifest]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}
@@ -1362,6 +1564,7 @@ jobs:
           PUBLISH_CLOUD: ${{ inputs.push_appflowy_cloud }}
           PUBLISH_AI: ${{ inputs.push_appflowy_ai }}
           PUBLISH_SEARCH: ${{ inputs.push_appflowy_search }}
+          PUBLISH_MCP: ${{ inputs.push_appflowy_mcp }}
           PUBLISH_BACKUP: ${{ inputs.push_appflowy_backup }}
         with:
           github-token: ${{ secrets.PUBLIC_REPO_TOKEN }}
@@ -1369,14 +1572,28 @@ jobs:
             const tag = process.env.IMAGE_TAG;
             if (tag.endsWith('_test')) return;
             const results = JSON.parse(process.env.PUBLISH_RESULTS);
-            const selected = [
+            const receiver = { owner: 'AppFlowy-IO', repo: 'AppFlowy-SelfHost-Commercial' };
+            let selected = [
               ['PUBLISH_GOTRUE', 'gotrue', 'gotrue_manifest'],
               ['PUBLISH_CLOUD', 'appflowy_cloud', 'appflowy_cloud_manifest'],
               ['PUBLISH_CLOUD', 'appflowy_worker', 'appflowy_worker_manifest'],
               ['PUBLISH_AI', 'ai', 'appflowy_ai_manifest'],
               ['PUBLISH_SEARCH', 'appflowy_search', 'appflowy_search_manifest'],
+              ['PUBLISH_MCP', 'appflowy_mcp', 'appflowy_mcp_manifest'],
               ['PUBLISH_BACKUP', 'appflowy_backup', 'appflowy_backup_manifest'],
             ].filter(([flag]) => process.env[flag] === 'true');
+            if (selected.some(([, service]) => service === 'appflowy_mcp')) {
+              // The receiver refuses a whole notification that names a service its default branch
+              // does not deploy, so an MCP pin is requested only once that branch deploys MCP.
+              const { data: compose } = await github.rest.repos.getContent({
+                ...receiver, path: 'docker-compose.yml', mediaType: { format: 'raw' },
+              });
+              if (typeof compose !== 'string') throw new Error('Unexpected Compose file response');
+              if (!/^  appflowy_mcp:[ \t]*(#.*)?$/m.test(compose)) {
+                core.notice('No MCP pin requested: the deployment repository does not deploy MCP yet.');
+                selected = selected.filter(([, service]) => service !== 'appflowy_mcp');
+              }
+            }
             if (!selected.length) return;
             for (const [, service, job] of selected) {
               if (results[job]?.result !== 'success') {
@@ -1385,8 +1602,7 @@ jobs:
               }
             }
             await github.rest.repos.createDispatchEvent({
-              owner: 'AppFlowy-IO',
-              repo: 'AppFlowy-SelfHost-Commercial',
+              ...receiver,
               event_type: 'selfhost-images-published',
               client_payload: {
                 source: 'cloud', tag,
