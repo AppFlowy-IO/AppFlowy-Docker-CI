@@ -1550,7 +1550,7 @@ jobs:
   notify_selfhost:
     name: Notify self-hosted deployment of published images
     if: ${{ !cancelled() && github.repository == 'AppFlowy-IO/AppFlowy-Docker-CI' && !endsWith(inputs.custom_tag, '_test') }}
-    needs: [gotrue_manifest, appflowy_cloud_manifest, appflowy_ai_manifest, appflowy_worker_manifest, appflowy_search_manifest, appflowy_backup_manifest]
+    needs: [gotrue_manifest, appflowy_cloud_manifest, appflowy_ai_manifest, appflowy_worker_manifest, appflowy_search_manifest, appflowy_mcp_manifest, appflowy_backup_manifest]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}
@@ -1564,6 +1564,7 @@ jobs:
           PUBLISH_CLOUD: ${{ inputs.push_appflowy_cloud }}
           PUBLISH_AI: ${{ inputs.push_appflowy_ai }}
           PUBLISH_SEARCH: ${{ inputs.push_appflowy_search }}
+          PUBLISH_MCP: ${{ inputs.push_appflowy_mcp }}
           PUBLISH_BACKUP: ${{ inputs.push_appflowy_backup }}
         with:
           github-token: ${{ secrets.PUBLIC_REPO_TOKEN }}
@@ -1571,14 +1572,28 @@ jobs:
             const tag = process.env.IMAGE_TAG;
             if (tag.endsWith('_test')) return;
             const results = JSON.parse(process.env.PUBLISH_RESULTS);
-            const selected = [
+            const receiver = { owner: 'AppFlowy-IO', repo: 'AppFlowy-SelfHost-Commercial' };
+            let selected = [
               ['PUBLISH_GOTRUE', 'gotrue', 'gotrue_manifest'],
               ['PUBLISH_CLOUD', 'appflowy_cloud', 'appflowy_cloud_manifest'],
               ['PUBLISH_CLOUD', 'appflowy_worker', 'appflowy_worker_manifest'],
               ['PUBLISH_AI', 'ai', 'appflowy_ai_manifest'],
               ['PUBLISH_SEARCH', 'appflowy_search', 'appflowy_search_manifest'],
+              ['PUBLISH_MCP', 'appflowy_mcp', 'appflowy_mcp_manifest'],
               ['PUBLISH_BACKUP', 'appflowy_backup', 'appflowy_backup_manifest'],
             ].filter(([flag]) => process.env[flag] === 'true');
+            if (selected.some(([, service]) => service === 'appflowy_mcp')) {
+              // The receiver refuses a whole notification that names a service its default branch
+              // does not deploy, so an MCP pin is requested only once that branch deploys MCP.
+              const { data: compose } = await github.rest.repos.getContent({
+                ...receiver, path: 'docker-compose.yml', mediaType: { format: 'raw' },
+              });
+              if (typeof compose !== 'string') throw new Error('Unexpected Compose file response');
+              if (!/^  appflowy_mcp:[ \t]*(#.*)?$/m.test(compose)) {
+                core.notice('No MCP pin requested: the deployment repository does not deploy MCP yet.');
+                selected = selected.filter(([, service]) => service !== 'appflowy_mcp');
+              }
+            }
             if (!selected.length) return;
             for (const [, service, job] of selected) {
               if (results[job]?.result !== 'success') {
@@ -1587,8 +1602,7 @@ jobs:
               }
             }
             await github.rest.repos.createDispatchEvent({
-              owner: 'AppFlowy-IO',
-              repo: 'AppFlowy-SelfHost-Commercial',
+              ...receiver,
               event_type: 'selfhost-images-published',
               client_payload: {
                 source: 'cloud', tag,
